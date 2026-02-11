@@ -1,0 +1,32 @@
+{
+  "markets": [
+    {
+      "label": "BTC 15m Up/Down",
+      "slug_prefix": "btc-updown-15m",
+      "window_minutes": 15,
+      "yes_token_id": null,
+      "no_token_id": null
+    },
+    {
+      "label": "ETH 15m Up/Down",
+      "slug_prefix": "eth-updown-15m",
+      "window_minutes": 15,
+      "yes_token_id": null,
+      "no_token_id": null
+    },
+    {
+      "label": "SOL 15m Up/Down",
+      "slug_prefix": "sol-updown-15m",
+      "window_minutes": 15,
+      "yes_token_id": null,
+      "no_token_id": null
+    },
+    {
+      "label": "XRP 15m Up/Down",
+      "slug_prefix": "xrp-updown-15m",
+      "window_minutes": 15,
+      "yes_token_id": null,
+      "no_token_id": null
+    }
+  ]
+}
