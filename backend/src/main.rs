@@ -743,6 +743,9 @@ async fn live_ws_task(state: AppState) {
                             | tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
                                 warn!("clob ws session ended: {err}");
                             }
+                            tokio_tungstenite::tungstenite::Error::Protocol(_) => {
+                                warn!("clob ws session ended: {err}");
+                            }
                             _ => error!("clob ws session ended: {err}"),
                         }
                     }
