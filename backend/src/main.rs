@@ -1,6 +1,6 @@
 use axum::{
     extract::{ws::Message as AxumMessage, ws::WebSocket, ws::WebSocketUpgrade, State},
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     routing::get,
     Json, Router,
 };
@@ -363,6 +363,7 @@ async fn main() {
     tokio::spawn(live_ws_task(state.clone()));
 
     let app = Router::new()
+        .route("/", get(root_handler))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot_handler))
         .route("/api/orderbooks", get(orderbooks_handler))
@@ -384,6 +385,12 @@ async fn main() {
 
 async fn health() -> Json<Value> {
     Json(serde_json::json!({ "ok": true }))
+}
+
+async fn root_handler() -> Html<&'static str> {
+    Html(
+        "<!doctype html><html><head><title>cdpm2.0</title></head><body><h1>cdpm2.0</h1><p>Backend is running.</p><ul><li><a href=\"/api/health\">/api/health</a></li><li><a href=\"/api/snapshot\">/api/snapshot</a></li></ul></body></html>",
+    )
 }
 
 async fn snapshot_handler(State(state): State<AppState>) -> Json<Snapshot> {
@@ -1278,7 +1285,7 @@ async fn apply_paper_logic(
                 }
             }),
             OutcomeSide::Down => down_ask.and_then(|price| {
-                if price_at_target(price, paper_entry_price()) {
+                if price_in_entry_band(price) {
                     Some((side, price))
                 } else {
                     None
