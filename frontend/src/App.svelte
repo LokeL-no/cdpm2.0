@@ -204,6 +204,11 @@
   const countOpenPositions = (market) => (market.open_positions || []).length;
   const countActiveSells = (market) =>
     (market.sell_orders || []).filter((order) => order.status === 'active').length;
+  const totalBuyCost = (market) =>
+    (market.trades || []).reduce((sum, trade) => {
+      if (trade.action === 'buy') return sum + (trade.notional || 0);
+      return sum;
+    }, 0);
 
   const togglePause = async () => {
     try {
@@ -381,6 +386,18 @@
               <div>
                 <p class="label">Active Sells</p>
                 <p class="value">{countActiveSells(market)}</p>
+              </div>
+            </div>
+            <div class="locked-profit">
+              <div>
+                <p class="label">Locked Cost</p>
+                <p class="value">${formatMoney(totalBuyCost(market))}</p>
+              </div>
+              <div>
+                <p class="label">Locked P/L</p>
+                <p class={`value ${market.realized_pnl >= 0 ? 'pos' : 'neg'}`}>
+                  ${formatMoney(market.realized_pnl)}
+                </p>
               </div>
             </div>
             <div class="paper-trades">

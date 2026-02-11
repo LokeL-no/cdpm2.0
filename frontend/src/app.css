@@ -113,7 +113,7 @@ h1 {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
 }
 
@@ -372,6 +372,16 @@ h1 {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.locked-profit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(26, 26, 26, 0.04);
+  border: 1px solid var(--stroke);
+}
+
 .paper-stats .value.pos {
   color: #2f9e44;
 }
@@ -508,5 +518,9 @@ h1 {
 
   .status {
     width: 100%;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
   }
 }

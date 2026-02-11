@@ -1199,7 +1199,7 @@ async fn apply_paper_logic(
         }
     }
     entry.open_positions = remaining;
-    if sold_any {
+    if sold_any && entry.open_positions.is_empty() {
         entry.done = true;
     }
 
