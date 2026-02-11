@@ -201,6 +201,12 @@
     return totals;
   };
 
+  const summaryByMarket = () =>
+    (paperState.markets || []).map((market) => ({
+      label: market.label,
+      pnl: market.realized_pnl || 0
+    }));
+
   const countOpenPositions = (market) => (market.open_positions || []).length;
   const countActiveSells = (market) =>
     (market.sell_orders || []).filter((order) => order.status === 'active').length;
@@ -348,7 +354,17 @@
         {#each Object.entries(summaryBySymbol()) as [symbol, pnl]}
           <div class="summary-row">
             <span class="label">{symbol}</span>
-            <span class={`value ${pnl >= 0 ? 'pos' : 'neg'}`}>${formatPrice(pnl)}</span>
+            <span class={`value ${pnl >= 0 ? 'pos' : 'neg'}`}>${formatMoney(pnl)}</span>
+          </div>
+        {/each}
+      </div>
+      <div class="summary-grid market">
+        {#each summaryByMarket() as market}
+          <div class="summary-row">
+            <span class="label">{market.label}</span>
+            <span class={`value ${market.pnl >= 0 ? 'pos' : 'neg'}`}>
+              ${formatMoney(market.pnl)}
+            </span>
           </div>
         {/each}
       </div>
