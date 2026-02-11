@@ -1192,7 +1192,15 @@ async fn apply_paper_logic(
     });
 
     if entry.slug != slug {
+        info!(
+            "Market rollover detected for '{}': {} -> {}",
+            label, entry.slug, slug
+        );
         let rollover_ts = now_ts();
+        
+        // Track the side we held in the previous market so we can buy the OPPOSITE in the new market
+        let previous_side = entry.open_positions.first().map(|pos| pos.side);
+        
         for position in entry.open_positions.drain(..) {
             let best_bid = match position.side {
                 OutcomeSide::Up => up_bid,
@@ -1227,9 +1235,22 @@ async fn apply_paper_logic(
                 step: position.step,
             });
         }
+        
         entry.slug = slug.to_string();
         entry.step_index = 0;
-        entry.expected_side = None;
+        
+        // CRITICAL: After rollover, buy the OPPOSITE side in the new market
+        entry.expected_side = previous_side.map(opposite_side);
+        
+        if let Some(expected) = entry.expected_side {
+            info!(
+                "After rollover, will buy {:?} in new market '{}' (was {:?} in previous market)",
+                expected, slug, previous_side
+            );
+        } else {
+            info!("After rollover, no previous positions, will buy any side in entry band");
+        }
+        
         entry.done = false;
         entry.cash = (per_budget + entry.realized_pnl).max(0.0);
     }
@@ -1300,28 +1321,62 @@ async fn apply_paper_logic(
     }
 
     let candidate = match entry.expected_side {
-        Some(side) => match side {
-            OutcomeSide::Up => up_ask.and_then(|price| {
-                if price_in_entry_band(price) {
-                    Some((side, price))
-                } else {
-                    None
+        Some(side) => {
+            match side {
+                OutcomeSide::Up => {
+                    if let Some(price) = up_ask {
+                        if price_in_entry_band(price) {
+                            info!(
+                                "Market '{}' ({}): Found UP ask at {:.4} in entry band [0.55-0.58], will buy",
+                                label, slug, price
+                            );
+                            Some((side, price))
+                        } else {
+                            info!(
+                                "Market '{}' ({}): UP ask at {:.4} NOT in entry band [0.55-0.58], waiting",
+                                label, slug, price
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
-            }),
-            OutcomeSide::Down => down_ask.and_then(|price| {
-                if price_in_entry_band(price) {
-                    Some((side, price))
-                } else {
-                    None
+                OutcomeSide::Down => {
+                    if let Some(price) = down_ask {
+                        if price_in_entry_band(price) {
+                            info!(
+                                "Market '{}' ({}): Found DOWN ask at {:.4} in entry band [0.55-0.58], will buy",
+                                label, slug, price
+                            );
+                            Some((side, price))
+                        } else {
+                            info!(
+                                "Market '{}' ({}): DOWN ask at {:.4} NOT in entry band [0.55-0.58], waiting",
+                                label, slug, price
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
-            }),
-        },
+            }
+        }
         None => {
             if let Some(price) = up_ask {
                 if price_in_entry_band(price) {
+                    info!(
+                        "Market '{}' ({}): First entry - found UP ask at {:.4} in entry band, will buy",
+                        label, slug, price
+                    );
                     Some((OutcomeSide::Up, price))
                 } else if let Some(price) = down_ask {
                     if price_in_entry_band(price) {
+                        info!(
+                            "Market '{}' ({}): First entry - found DOWN ask at {:.4} in entry band, will buy",
+                            label, slug, price
+                        );
                         Some((OutcomeSide::Down, price))
                     } else {
                         None
@@ -1331,6 +1386,10 @@ async fn apply_paper_logic(
                 }
             } else if let Some(price) = down_ask {
                 if price_in_entry_band(price) {
+                    info!(
+                        "Market '{}' ({}): First entry - found DOWN ask at {:.4} in entry band, will buy",
+                        label, slug, price
+                    );
                     Some((OutcomeSide::Down, price))
                 } else {
                     None
@@ -1390,6 +1449,19 @@ fn apply_paper_buy(entry: &mut PaperMarketState, side: OutcomeSide, price: f64, 
     let slippage = price - target_price;
     entry.cash -= next_amount;
     let order_id = format!("{}-{}-{}", entry.slug, outcome_label(side), entry.step_index + 1);
+    
+    info!(
+        "🟢 BUY: Market '{}' ({}) - {} {} shares at {:.4} (step {}, notional ${:.2}, target exit {:.2})",
+        entry.label,
+        entry.slug,
+        outcome_label(side).to_uppercase(),
+        size,
+        price,
+        entry.step_index + 1,
+        next_amount,
+        paper_exit_price()
+    );
+    
     entry.open_positions.push(PaperPosition {
         side,
         entry_price: price,
@@ -1428,6 +1500,12 @@ fn apply_paper_buy(entry: &mut PaperMarketState, side: OutcomeSide, price: f64, 
     });
     entry.step_index += 1;
     entry.expected_side = Some(opposite_side(side));
+    
+    info!(
+        "  → Cash remaining: ${:.2}, Next expected side: {:?}",
+        entry.cash,
+        entry.expected_side
+    );
 }
 
 async fn apply_price_update(state: &AppState, token_id: &str, hint: PriceHint) {
