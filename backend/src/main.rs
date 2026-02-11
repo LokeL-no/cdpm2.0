@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    io::ErrorKind,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -19,7 +20,7 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 static LOGGED_WS_SAMPLE: AtomicBool = AtomicBool::new(false);
 
@@ -342,6 +343,7 @@ async fn main() {
     let markets = Arc::new(load_markets());
     let http = Client::builder()
         .timeout(Duration::from_secs(8))
+        .user_agent("cdpm2.0/0.1")
         .build()
         .expect("http client");
 
@@ -725,8 +727,21 @@ async fn live_ws_task(state: AppState) {
                     backoff = Duration::from_secs(2);
                     info!("clob ws connected {endpoint}");
                     if let Err(err) = run_clob_session(stream, state.clone()).await {
-                        error!("clob ws session ended: {err}");
+                        match err {
+                            tokio_tungstenite::tungstenite::Error::Io(ref io_err)
+                                if matches!(io_err.kind(), ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted) =>
+                            {
+                                warn!("clob ws session ended: {err}");
+                            }
+                            tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                            | tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
+                                warn!("clob ws session ended: {err}");
+                            }
+                            _ => error!("clob ws session ended: {err}"),
+                        }
                     }
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
                     break;
                 }
                 Err(err) => {
@@ -1146,12 +1161,45 @@ async fn apply_paper_logic(
     });
 
     if entry.slug != slug {
+        let rollover_ts = now_ts();
+        for position in entry.open_positions.drain(..) {
+            let best_bid = match position.side {
+                OutcomeSide::Up => up_bid,
+                OutcomeSide::Down => down_bid,
+            };
+            let price = best_bid.unwrap_or(position.entry_price);
+            let pnl = (price - position.entry_price) * position.size;
+            entry.realized_pnl += pnl;
+            let slippage = price - position.target_price;
+            if let Some(order) = entry
+                .sell_orders
+                .iter_mut()
+                .find(|order| order.id == position.order_id)
+            {
+                order.status = "rolled".to_string();
+                order.filled_ts = Some(rollover_ts);
+                order.price = price;
+                order.slippage = slippage;
+            }
+            entry.trades.push(PaperTrade {
+                ts: rollover_ts,
+                label: entry.label.clone(),
+                slug: entry.slug.clone(),
+                action: "sell".to_string(),
+                side: outcome_label(position.side).to_string(),
+                price,
+                target_price: position.target_price,
+                slippage,
+                size: position.size,
+                notional: price * position.size,
+                realized_pnl: pnl,
+                step: position.step,
+            });
+        }
         entry.slug = slug.to_string();
         entry.step_index = 0;
         entry.expected_side = None;
         entry.done = false;
-        entry.open_positions.clear();
-        entry.sell_orders.clear();
         entry.cash = (per_budget + entry.realized_pnl).max(0.0);
     }
 
@@ -1617,31 +1665,53 @@ async fn fetch_event_metadata(http: &Client, slug: &str) -> EventMetadata {
 }
 
 async fn fetch_event_payload(http: &Client, url: &str, slug: &str) -> Option<Value> {
-    match http.get(url).send().await {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                match resp.json().await {
-                    Ok(value) => Some(value),
-                    Err(err) => {
-                        error!("event metadata parse failed for {slug}: {err}");
-                        None
-                    }
+    let max_attempts = 3;
+    for attempt in 1..=max_attempts {
+        match http.get(url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    return match resp.json().await {
+                        Ok(value) => Some(value),
+                        Err(err) => {
+                            warn!("event metadata parse failed for {slug}: {err}");
+                            None
+                        }
+                    };
                 }
-            } else {
-                error!(
-                    "event metadata request returned {} for {} via {}",
-                    resp.status(),
-                    slug,
-                    url
+
+                let status = resp.status();
+                if status.as_u16() == 429 || status.is_server_error() {
+                    warn!(
+                        "event metadata request returned {} for {} via {} (attempt {}/{})",
+                        status,
+                        slug,
+                        url,
+                        attempt,
+                        max_attempts
+                    );
+                } else {
+                    warn!(
+                        "event metadata request returned {} for {} via {}",
+                        status,
+                        slug,
+                        url
+                    );
+                    return None;
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "event metadata request failed for {slug} via {url} (attempt {}/{}): {err}",
+                    attempt,
+                    max_attempts
                 );
-                None
             }
         }
-        Err(err) => {
-            error!("event metadata request failed for {slug} via {url}: {err}");
-            None
-        }
+
+        tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
     }
+
+    None
 }
 
 fn build_event_metadata(value: &Value) -> EventMetadata {

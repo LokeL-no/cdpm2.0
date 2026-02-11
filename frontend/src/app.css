@@ -489,6 +489,12 @@ h1 {
   border-color: rgba(47, 158, 68, 0.32);
 }
 
+.pill.status.rolled {
+  color: #495057;
+  background: rgba(73, 80, 87, 0.16);
+  border-color: rgba(73, 80, 87, 0.32);
+}
+
 @keyframes pulse {
   0% {
     transform: scale(0.9);
