@@ -1154,7 +1154,7 @@ async fn apply_paper_logic(
 
     let mut sold_any = false;
     let mut remaining = Vec::new();
-    for mut position in entry.open_positions.drain(..) {
+    for position in entry.open_positions.drain(..) {
         let best_bid = match position.side {
             OutcomeSide::Up => up_bid,
             OutcomeSide::Down => down_bid,
@@ -1220,7 +1220,7 @@ async fn apply_paper_logic(
     let candidate = match entry.expected_side {
         Some(side) => match side {
             OutcomeSide::Up => up_ask.and_then(|price| {
-                if price_at_target(price, paper_entry_price()) {
+                if price_in_entry_band(price) {
                     Some((side, price))
                 } else {
                     None
@@ -1236,10 +1236,10 @@ async fn apply_paper_logic(
         },
         None => {
             if let Some(price) = up_ask {
-                if price_at_target(price, paper_entry_price()) {
+                if price_in_entry_band(price) {
                     Some((OutcomeSide::Up, price))
                 } else if let Some(price) = down_ask {
-                    if price_at_target(price, paper_entry_price()) {
+                    if price_in_entry_band(price) {
                         Some((OutcomeSide::Down, price))
                     } else {
                         None
@@ -1248,7 +1248,7 @@ async fn apply_paper_logic(
                     None
                 }
             } else if let Some(price) = down_ask {
-                if price_at_target(price, paper_entry_price()) {
+                if price_in_entry_band(price) {
                     Some((OutcomeSide::Down, price))
                 } else {
                     None
@@ -1282,6 +1282,10 @@ fn paper_exit_price() -> f64 {
 fn price_at_target(price: f64, target: f64) -> bool {
     let tolerance = 0.0005;
     (price - target).abs() <= tolerance
+}
+
+fn price_in_entry_band(price: f64) -> bool {
+    (0.55..=0.58).contains(&price)
 }
 
 fn opposite_side(side: OutcomeSide) -> OutcomeSide {

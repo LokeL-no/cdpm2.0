@@ -34,6 +34,16 @@
     return value.toFixed(4);
   };
 
+  const formatMoney = (value) => {
+    if (value === null || value === undefined) return '--';
+    return value.toFixed(2);
+  };
+
+  const formatShares = (value) => {
+    if (value === null || value === undefined) return '--';
+    return value.toFixed(4);
+  };
+
   const formatSigned = (value) => {
     if (value === null || value === undefined) return '--';
     const sign = value > 0 ? '+' : '';
@@ -191,6 +201,10 @@
     return totals;
   };
 
+  const countOpenPositions = (market) => (market.open_positions || []).length;
+  const countActiveSells = (market) =>
+    (market.sell_orders || []).filter((order) => order.status === 'active').length;
+
   const togglePause = async () => {
     try {
       const resp = await fetch(buildHttpUrl('/api/paper/pause'), {
@@ -263,11 +277,11 @@
           </div>
           <div class="prices">
             <div class="price yes">
-              <p class="label">UP</p>
+              <span class="pill side up">UP</span>
               <p class="value">{formatPrice(market.price?.up)}</p>
             </div>
             <div class="price no">
-              <p class="label">DOWN</p>
+              <span class="pill side down">DOWN</span>
               <p class="value">{formatPrice(market.price?.down)}</p>
             </div>
           </div>
@@ -345,10 +359,10 @@
               </div>
               <span class={`status-pill ${market.status}`}>{market.status}</span>
             </div>
-            <div class="paper-stats">
+            <div class="paper-stats wide">
               <div>
                 <p class="label">Cash</p>
-                <p class="value">${formatPrice(market.cash)}</p>
+                <p class="value">${formatMoney(market.cash)}</p>
               </div>
               <div>
                 <p class="label">P/L</p>
@@ -360,19 +374,37 @@
                 <p class="label">Step</p>
                 <p class="value">{market.step_index}</p>
               </div>
+              <div>
+                <p class="label">Active Trades</p>
+                <p class="value">{countOpenPositions(market)}</p>
+              </div>
+              <div>
+                <p class="label">Active Sells</p>
+                <p class="value">{countActiveSells(market)}</p>
+              </div>
             </div>
             <div class="paper-trades">
               <p class="label">Trades</p>
               {#if market.trades?.length}
-                <div class="trade-list">
+                <div class="table">
+                  <div class="table-header">
+                    <span>Type</span>
+                    <span>Side</span>
+                    <span class="num">Price</span>
+                    <span class="num">Target</span>
+                    <span class="num">Slippage</span>
+                    <span class="num">Cost</span>
+                    <span class="num">Shares</span>
+                  </div>
                   {#each market.trades.slice(-6).reverse() as trade}
-                    <div class={`trade-row ${trade.action}`}>
-                      <span>{trade.action.toUpperCase()}</span>
-                      <span>{trade.side.toUpperCase()}</span>
-                      <span>@ {formatPrice(trade.price)}</span>
-                      <span>tgt {formatPrice(trade.target_price)}</span>
-                      <span>slip {formatSigned(trade.slippage)}</span>
-                      <span>${formatPrice(trade.notional)}</span>
+                    <div class="table-row">
+                      <span class={`pill action ${trade.action}`}>{trade.action.toUpperCase()}</span>
+                      <span class={`pill side ${trade.side}`}>{trade.side.toUpperCase()}</span>
+                      <span class="num">{formatPrice(trade.price)}</span>
+                      <span class="num">{formatPrice(trade.target_price)}</span>
+                      <span class="num">{formatSigned(trade.slippage)}</span>
+                      <span class="num">${formatMoney(trade.notional)}</span>
+                      <span class="num">{formatShares(trade.size)} sh</span>
                     </div>
                   {/each}
                 </div>
@@ -383,15 +415,25 @@
             <div class="paper-trades">
               <p class="label">Sell Orders</p>
               {#if market.sell_orders?.length}
-                <div class="trade-list">
+                <div class="table">
+                  <div class="table-header">
+                    <span>Status</span>
+                    <span>Side</span>
+                    <span class="num">Price</span>
+                    <span class="num">Target</span>
+                    <span class="num">Slippage</span>
+                    <span class="num">Shares</span>
+                    <span class="num">Value</span>
+                  </div>
                   {#each market.sell_orders.slice(-6).reverse() as order}
-                    <div class={`trade-row ${order.status === 'filled' ? 'sell' : 'buy'}`}>
-                      <span>{order.status.toUpperCase()}</span>
-                      <span>{order.side.toUpperCase()}</span>
-                      <span>@ {formatPrice(order.price)}</span>
-                      <span>tgt {formatPrice(order.target_price)}</span>
-                      <span>slip {formatSigned(order.slippage)}</span>
-                      <span>{formatSize(order.size)}</span>
+                    <div class="table-row">
+                      <span class={`pill status ${order.status}`}>{order.status.toUpperCase()}</span>
+                      <span class={`pill side ${order.side}`}>{order.side.toUpperCase()}</span>
+                      <span class="num">{formatPrice(order.price)}</span>
+                      <span class="num">{formatPrice(order.target_price)}</span>
+                      <span class="num">{formatSigned(order.slippage)}</span>
+                      <span class="num">{formatShares(order.size)} sh</span>
+                      <span class="num">${formatMoney(order.price * order.size)}</span>
                     </div>
                   {/each}
                 </div>

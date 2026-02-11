@@ -185,6 +185,9 @@ h1 {
   border-radius: 16px;
   background: rgba(242, 95, 76, 0.08);
   border: 1px solid rgba(242, 95, 76, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .price.no {
@@ -195,6 +198,10 @@ h1 {
 .price .value {
   font-size: 1.2rem;
   font-weight: 600;
+}
+
+.price .pill {
+  width: fit-content;
 }
 
 .orderbook {
@@ -255,8 +262,10 @@ h1 {
 
 .paper-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
+  max-width: 980px;
+  margin: 0 auto;
 }
 
 .summary-card {
@@ -359,6 +368,10 @@ h1 {
   gap: 12px;
 }
 
+.paper-stats.wide {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .paper-stats .value.pos {
   color: #2f9e44;
 }
@@ -372,26 +385,94 @@ h1 {
   gap: 8px;
 }
 
-.trade-list {
+.table {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.72rem;
 }
 
-.trade-row {
+.table-header,
+.table-row {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: 0.9fr 0.9fr 1.1fr 1.1fr 1.1fr 1.1fr 1.1fr;
   gap: 6px;
   align-items: center;
 }
 
-.trade-row.buy {
-  color: #2f9e44;
+.table-header {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.62rem;
 }
 
-.trade-row.sell {
+.table-row {
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(26, 26, 26, 0.04);
+  border: 1px solid var(--stroke);
+  color: var(--ink);
+}
+
+.table-row span,
+.table-header span {
+  white-space: nowrap;
+}
+
+.table-row .num,
+.table-header .num {
+  text-align: right;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(26, 26, 26, 0.08);
+  border: 1px solid var(--stroke);
+}
+
+.pill.action.buy {
+  color: #2a9d8f;
+  background: rgba(42, 157, 143, 0.16);
+  border-color: rgba(42, 157, 143, 0.32);
+}
+
+.pill.action.sell {
+  color: #e76f51;
+  background: rgba(231, 111, 81, 0.16);
+  border-color: rgba(231, 111, 81, 0.32);
+}
+
+.pill.side.up {
+  color: #2f9e44;
+  background: rgba(47, 158, 68, 0.16);
+  border-color: rgba(47, 158, 68, 0.32);
+}
+
+.pill.side.down {
   color: #c92a2a;
+  background: rgba(201, 42, 42, 0.16);
+  border-color: rgba(201, 42, 42, 0.32);
+}
+
+.pill.status.active {
+  color: #f08c00;
+  background: rgba(240, 140, 0, 0.18);
+  border-color: rgba(240, 140, 0, 0.32);
+}
+
+.pill.status.filled {
+  color: #2f9e44;
+  background: rgba(47, 158, 68, 0.16);
+  border-color: rgba(47, 158, 68, 0.32);
 }
 
 @keyframes pulse {
