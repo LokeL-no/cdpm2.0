@@ -1,6 +1,6 @@
 use axum::{
     extract::{ws::Message as AxumMessage, ws::WebSocket, ws::WebSocketUpgrade, State},
-    response::{Html, IntoResponse},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -20,6 +20,7 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{error, info, warn};
 
 static LOGGED_WS_SAMPLE: AtomicBool = AtomicBool::new(false);
@@ -362,8 +363,11 @@ async fn main() {
 
     tokio::spawn(live_ws_task(state.clone()));
 
+    let static_dir = env::var("FRONTEND_DIST").unwrap_or_else(|_| "frontend/dist".into());
+    let static_service = ServeDir::new(static_dir.clone())
+        .fallback(ServeFile::new(format!("{static_dir}/index.html")));
+
     let app = Router::new()
-        .route("/", get(root_handler))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot_handler))
         .route("/api/orderbooks", get(orderbooks_handler))
@@ -373,7 +377,8 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .route("/ws/orderbook", get(ws_orderbook_handler))
         .with_state(state)
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any));
+        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any))
+        .fallback_service(static_service);
 
     let addr = "0.0.0.0:3001";
     info!("listening on {addr}");
@@ -385,12 +390,6 @@ async fn main() {
 
 async fn health() -> Json<Value> {
     Json(serde_json::json!({ "ok": true }))
-}
-
-async fn root_handler() -> Html<&'static str> {
-    Html(
-        "<!doctype html><html><head><title>cdpm2.0</title></head><body><h1>cdpm2.0</h1><p>Backend is running.</p><ul><li><a href=\"/api/health\">/api/health</a></li><li><a href=\"/api/snapshot\">/api/snapshot</a></li></ul></body></html>",
-    )
 }
 
 async fn snapshot_handler(State(state): State<AppState>) -> Json<Snapshot> {
