@@ -791,7 +791,8 @@ async fn run_clob_session(
     loop {
         tokio::select! {
             _ = ping.tick() => {
-                write.send(WsMessage::Text("PING".to_string())).await?;
+                // Use a control ping frame to keep the CLOB connection alive.
+                write.send(WsMessage::Ping(Vec::new())).await?;
             }
             _ = refresh.tick() => {
                 let next_tokens = refresh_market_metadata(&state).await;
@@ -813,6 +814,8 @@ async fn run_clob_session(
                     Some(Ok(WsMessage::Ping(payload))) => {
                         write.send(WsMessage::Pong(payload)).await?;
                     }
+                    Some(Ok(WsMessage::Pong(_))) => {}
+                    Some(Ok(WsMessage::Close(_))) => break,
                     Some(Ok(_)) => {}
                     Some(Err(err)) => return Err(err),
                     None => break,
