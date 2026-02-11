@@ -1069,11 +1069,6 @@ async fn apply_book_update(state: &AppState, update: BookUpdateLite) {
         }
     };
 
-    let (up_bid, up_ask) = best_bid_ask(&entry.up);
-    let (down_bid, down_ask) = best_bid_ask(&entry.down);
-    let label = entry.label.clone();
-    let slug = entry.slug.clone();
-
     let update_message = OrderBookUpdateMessage {
         message_type: "orderbook_update".to_string(),
         ts: now_ts(),
@@ -1111,7 +1106,7 @@ async fn apply_book_update(state: &AppState, update: BookUpdateLite) {
 
     drop(live);
     let _ = state.book_broadcaster.send(update_message);
-    apply_paper_logic(state, &label, &slug, up_bid, up_ask, down_bid, down_ask).await;
+    // Paper trading now uses market prices from apply_price_update, not orderbook
 }
 
 fn best_bid_ask(side: &BookSide) -> (Option<f64>, Option<f64>) {
@@ -1167,10 +1162,8 @@ async fn apply_paper_logic(
     state: &AppState,
     label: &str,
     slug: &str,
-    up_bid: Option<f64>,
-    up_ask: Option<f64>,
-    down_bid: Option<f64>,
-    down_ask: Option<f64>,
+    up_price: Option<f64>,
+    down_price: Option<f64>,
 ) {
     tokio::time::sleep(Duration::from_millis(30)).await;
     let mut paper = state.paper.write().await;
@@ -1202,11 +1195,12 @@ async fn apply_paper_logic(
         let previous_side = entry.open_positions.first().map(|pos| pos.side);
         
         for position in entry.open_positions.drain(..) {
-            let best_bid = match position.side {
-                OutcomeSide::Up => up_bid,
-                OutcomeSide::Down => down_bid,
-            };
-            let price = best_bid.unwrap_or(position.entry_price);
+            // Use market price to close position on rollover
+            let price = match position.side {
+                OutcomeSide::Up => up_price,
+                OutcomeSide::Down => down_price,
+            }.unwrap_or(position.entry_price);
+            
             let pnl = (price - position.entry_price) * position.size;
             entry.realized_pnl += pnl;
             let slippage = price - position.target_price;
@@ -1258,15 +1252,18 @@ async fn apply_paper_logic(
     let mut sold_any = false;
     let mut remaining = Vec::new();
     for position in entry.open_positions.drain(..) {
-        let best_bid = match position.side {
-            OutcomeSide::Up => up_bid,
-            OutcomeSide::Down => down_bid,
+        // Check if we can sell at target price
+        let current_price = match position.side {
+            OutcomeSide::Up => up_price,
+            OutcomeSide::Down => down_price,
         };
-        let filled = best_bid
+        
+        let filled = current_price
             .map(|price| price_at_target(price, position.target_price))
             .unwrap_or(false);
+        
         if filled {
-            let price = best_bid.unwrap_or(position.target_price);
+            let price = current_price.unwrap_or(position.target_price);
             let proceeds = price * position.size;
             entry.cash += proceeds;
             let pnl = (price - position.entry_price) * position.size;
@@ -1324,16 +1321,16 @@ async fn apply_paper_logic(
         Some(side) => {
             match side {
                 OutcomeSide::Up => {
-                    if let Some(price) = up_ask {
+                    if let Some(price) = up_price {
                         if price_in_entry_band(price) {
                             info!(
-                                "Market '{}' ({}): Found UP ask at {:.4} in entry band [0.55-0.58], will buy",
+                                "Market '{}' ({}): Found UP price at {:.4} in entry band [0.55-0.58], will buy",
                                 label, slug, price
                             );
                             Some((side, price))
                         } else {
                             info!(
-                                "Market '{}' ({}): UP ask at {:.4} NOT in entry band [0.55-0.58], waiting",
+                                "Market '{}' ({}): UP price at {:.4} NOT in entry band [0.55-0.58], waiting",
                                 label, slug, price
                             );
                             None
@@ -1343,16 +1340,16 @@ async fn apply_paper_logic(
                     }
                 }
                 OutcomeSide::Down => {
-                    if let Some(price) = down_ask {
+                    if let Some(price) = down_price {
                         if price_in_entry_band(price) {
                             info!(
-                                "Market '{}' ({}): Found DOWN ask at {:.4} in entry band [0.55-0.58], will buy",
+                                "Market '{}' ({}): Found DOWN price at {:.4} in entry band [0.55-0.58], will buy",
                                 label, slug, price
                             );
                             Some((side, price))
                         } else {
                             info!(
-                                "Market '{}' ({}): DOWN ask at {:.4} NOT in entry band [0.55-0.58], waiting",
+                                "Market '{}' ({}): DOWN price at {:.4} NOT in entry band [0.55-0.58], waiting",
                                 label, slug, price
                             );
                             None
@@ -1364,17 +1361,17 @@ async fn apply_paper_logic(
             }
         }
         None => {
-            if let Some(price) = up_ask {
+            if let Some(price) = up_price {
                 if price_in_entry_band(price) {
                     info!(
-                        "Market '{}' ({}): First entry - found UP ask at {:.4} in entry band, will buy",
+                        "Market '{}' ({}): First entry - found UP price at {:.4} in entry band, will buy",
                         label, slug, price
                     );
                     Some((OutcomeSide::Up, price))
-                } else if let Some(price) = down_ask {
+                } else if let Some(price) = down_price {
                     if price_in_entry_band(price) {
                         info!(
-                            "Market '{}' ({}): First entry - found DOWN ask at {:.4} in entry band, will buy",
+                            "Market '{}' ({}): First entry - found DOWN price at {:.4} in entry band, will buy",
                             label, slug, price
                         );
                         Some((OutcomeSide::Down, price))
@@ -1384,10 +1381,10 @@ async fn apply_paper_logic(
                 } else {
                     None
                 }
-            } else if let Some(price) = down_ask {
+            } else if let Some(price) = down_price {
                 if price_in_entry_band(price) {
                     info!(
-                        "Market '{}' ({}): First entry - found DOWN ask at {:.4} in entry band, will buy",
+                        "Market '{}' ({}): First entry - found DOWN price at {:.4} in entry band, will buy",
                         label, slug, price
                     );
                     Some((OutcomeSide::Down, price))
@@ -1545,8 +1542,18 @@ async fn apply_price_update(state: &AppState, token_id: &str, hint: PriceHint) {
     }
 
     snapshot.source = "clob".to_string();
+    
+    // Get prices for paper trading
+    let label = mapping.label.clone();
+    let slug = mapping.slug.clone();
+    let up_price = snapshot.price.up;
+    let down_price = snapshot.price.down;
+    
     drop(live);
     broadcast_snapshot(state).await;
+    
+    // Apply paper trading logic using market prices (not orderbook)
+    apply_paper_logic(state, &label, &slug, up_price, down_price).await;
 }
 
 struct MarketMeta {
