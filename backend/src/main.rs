@@ -677,9 +677,11 @@ fn align_epoch_end(now_ts: i64, window_minutes: u64) -> i64 {
     }
     let remainder = ((now_ts % window_seconds) + window_seconds) % window_seconds;
     if remainder == 0 {
+        // We're exactly at a boundary, use the next window
         now_ts + window_seconds
     } else {
-        now_ts - remainder
+        // We're in the middle of a window, return the end of the CURRENT window (not previous)
+        now_ts - remainder + window_seconds
     }
 }
 
@@ -1014,8 +1016,17 @@ fn parse_book_level(value: &Value) -> Option<BookLevel> {
 async fn apply_book_update(state: &AppState, update: BookUpdateLite) {
     let mut live = state.live.write().await;
     let mapping = match live.token_map.get(&update.asset_id) {
-        Some(mapping) => mapping.clone(),
-        None => return,
+        Some(mapping) => {
+            info!(
+                "Order book update for token {} -> market '{}' ({}) as {:?} outcome",
+                update.asset_id, mapping.label, mapping.slug, mapping.outcome
+            );
+            mapping.clone()
+        }
+        None => {
+            warn!("Received order book update for unknown token: {}", update.asset_id);
+            return;
+        }
     };
 
     let entry = live
@@ -1037,11 +1048,19 @@ async fn apply_book_update(state: &AppState, update: BookUpdateLite) {
     let outcome = match mapping.outcome {
         OutcomeSide::Up => {
             let depth = orderbook_depth();
+            info!(
+                "Merging order book for market '{}' ({}), UP side: {} bids, {} asks",
+                entry.label, entry.slug, update.bids.len(), update.asks.len()
+            );
             merge_book_side(&mut entry.up, &update, depth);
             BookOutcome::Up
         }
         OutcomeSide::Down => {
             let depth = orderbook_depth();
+            info!(
+                "Merging order book for market '{}' ({}), DOWN side: {} bids, {} asks",
+                entry.label, entry.slug, update.bids.len(), update.asks.len()
+            );
             merge_book_side(&mut entry.down, &update, depth);
             BookOutcome::Down
         }
@@ -1505,6 +1524,7 @@ async fn refresh_market_metadata(state: &AppState) -> HashSet<String> {
     let mut token_map = HashMap::new();
     let mut token_set = HashSet::new();
     let mut books = HashMap::new();
+    let mut token_to_market = HashMap::new(); // For validation
 
     for meta in markets {
         let mut snapshot = MarketSnapshot {
@@ -1524,6 +1544,19 @@ async fn refresh_market_metadata(state: &AppState) -> HashSet<String> {
         }
 
         if let Some(id) = meta.up_token_id.clone() {
+            // Check for conflicts
+            if let Some(existing_market) = token_to_market.get(&id) {
+                error!(
+                    "Token ID {} is mapped to multiple markets: '{}' and '{}'!",
+                    id, existing_market, meta.label
+                );
+            }
+            token_to_market.insert(id.clone(), meta.label.clone());
+
+            info!(
+                "Mapping token {} to market '{}' (slug: {}) as UP outcome",
+                id, meta.label, meta.slug
+            );
             token_set.insert(id.clone());
             token_map.insert(
                 id,
@@ -1538,6 +1571,19 @@ async fn refresh_market_metadata(state: &AppState) -> HashSet<String> {
         }
 
         if let Some(id) = meta.down_token_id.clone() {
+            // Check for conflicts
+            if let Some(existing_market) = token_to_market.get(&id) {
+                error!(
+                    "Token ID {} is mapped to multiple markets: '{}' and '{}'!",
+                    id, existing_market, meta.label
+                );
+            }
+            token_to_market.insert(id.clone(), meta.label.clone());
+
+            info!(
+                "Mapping token {} to market '{}' (slug: {}) as DOWN outcome",
+                id, meta.label, meta.slug
+            );
             token_set.insert(id.clone());
             token_map.insert(
                 id,
@@ -1549,6 +1595,16 @@ async fn refresh_market_metadata(state: &AppState) -> HashSet<String> {
                     outcome: OutcomeSide::Down,
                 },
             );
+        }
+
+        // Validate that up and down tokens are different
+        if let (Some(up_id), Some(down_id)) = (&meta.up_token_id, &meta.down_token_id) {
+            if up_id == down_id {
+                error!(
+                    "Market '{}' has the same token ID for both UP and DOWN outcomes: {}",
+                    meta.label, up_id
+                );
+            }
         }
 
         latest.insert(meta.label.clone(), snapshot);
@@ -1724,10 +1780,56 @@ async fn fetch_event_payload(http: &Client, url: &str, slug: &str) -> Option<Val
 }
 
 fn build_event_metadata(value: &Value) -> EventMetadata {
-    let (up_token_id, down_token_id) = extract_token_ids(value);
+    let title = extract_event_title(value);
+    let (mut up_token_id, mut down_token_id) = extract_token_ids(value);
     let price_hint = extract_price_hint(value);
+    
+    // Check if the market question is phrased negatively (asking ONLY about "down", "lower", etc.)
+    // In such cases, "Yes" means down and "No" means up, so we need to swap the tokens
+    // Examples: "Will BTC go lower?" -> Yes=Down, No=Up (needs swap)
+    //           "BTC Up or Down?" -> Up=Up, Down=Down (no swap needed)
+    let should_swap = if let Some(ref t) = title {
+        let normalized = t.to_lowercase();
+        
+        // Check if it's asking about positive movement
+        let asks_positive = normalized.contains("higher") 
+            || normalized.contains("above") 
+            || normalized.contains("over")
+            || (normalized.contains("up") && !normalized.contains("up or down") && !normalized.contains("updown"))
+            || normalized.contains("increase")
+            || normalized.contains("rise")
+            || normalized.contains("gain");
+        
+        // Check if the question is asking ONLY about negative movement (not "up or down")
+        let asks_negative = (normalized.contains("lower") 
+            || normalized.contains("below") 
+            || normalized.contains("under")
+            || (normalized.contains("down") && !normalized.contains("up or down") && !normalized.contains("updown"))
+            || normalized.contains("decrease")
+            || normalized.contains("fall")
+            || normalized.contains("drop"))
+            && !asks_positive;
+        
+        // Only swap if it asks ONLY about negative movement
+        asks_negative
+    } else {
+        false
+    };
+    
+    if should_swap {
+        warn!(
+            "Market title '{}' appears to ask about ONLY negative movement. Swapping token assignments: up<->down",
+            title.as_ref().unwrap_or(&"".to_string())
+        );
+        std::mem::swap(&mut up_token_id, &mut down_token_id);
+    }
+    
+    info!(
+        "Extracted token IDs from event metadata: up={:?}, down={:?} (swapped={})",
+        up_token_id, down_token_id, should_swap
+    );
     EventMetadata {
-        title: extract_event_title(value),
+        title,
         up_token_id,
         down_token_id,
         price_hint,
@@ -1928,7 +2030,18 @@ fn token_ids_from_market(value: &Value) -> (Option<String>, Option<String>) {
     }
 
     if (result.0.is_none() || result.1.is_none()) && ids.len() >= 2 {
-        result = merge_token_pairs(result, (Some(ids[0].clone()), Some(ids[1].clone())));
+        warn!(
+            "Token classification failed or incomplete, using positional fallback: ids[0]={} as UP, ids[1]={} as DOWN. This may be incorrect if Polymarket returns tokens in a different order!",
+            ids[0], ids[1]
+        );
+        // Note: This assumes ids[0] is the "yes"/"up" token and ids[1] is the "no"/"down" token
+        // This matches Polymarket's standard ordering but may not always be correct
+        if result.0.is_none() {
+            result.0 = Some(ids[0].clone());
+        }
+        if result.1.is_none() && ids.len() > 1 {
+            result.1 = Some(ids[1].clone());
+        }
     }
 
     result
@@ -1969,9 +2082,18 @@ fn classify_with_id(label: Option<&str>, id: Option<String>) -> (Option<String>,
 }
 
 fn pair_outcomes_with_ids(outcomes: &[String], ids: &[String]) -> (Option<String>, Option<String>) {
+    info!(
+        "Pairing outcomes {:?} with token IDs {:?}",
+        outcomes, ids
+    );
     let mut result = (None, None);
     for (label, token_id) in outcomes.iter().zip(ids.iter()) {
-        let segment = match classify_outcome(label) {
+        let classification = classify_outcome(label);
+        info!(
+            "Outcome '{}' + token '{}' => classified as {:?}",
+            label, token_id, classification
+        );
+        let segment = match classification {
             OutcomeLabel::Up => (Some(token_id.clone()), None),
             OutcomeLabel::Down => (None, Some(token_id.clone())),
             OutcomeLabel::Unknown => (None, None),
@@ -2036,7 +2158,7 @@ fn merge_price_hints(mut base: PriceHint, new: PriceHint) -> PriceHint {
     base
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum OutcomeLabel {
     Up,
     Down,
@@ -2044,15 +2166,25 @@ enum OutcomeLabel {
 }
 
 fn classify_outcome(label: &str) -> OutcomeLabel {
-    let normalized = label.to_lowercase();
+    let normalized = label.trim().to_lowercase();
+    
+    // First check for exact matches (case-insensitive)
+    if normalized == "up" || normalized == "yes" || normalized == "higher" || normalized == "above" {
+        return OutcomeLabel::Up;
+    }
+    if normalized == "down" || normalized == "no" || normalized == "lower" || normalized == "below" {
+        return OutcomeLabel::Down;
+    }
+    
+    // Then check for partial matches
     if contains_any(
         &normalized,
-        &["yes", "up", "higher", "above", "over", "bull"],
+        &["yes", "up", "higher", "above", "over", "bull", "increase", "rise"],
     ) {
         OutcomeLabel::Up
     } else if contains_any(
         &normalized,
-        &["no", "down", "lower", "below", "under", "bear"],
+        &["no", "down", "lower", "below", "under", "bear", "decrease", "fall"],
     ) {
         OutcomeLabel::Down
     } else {
