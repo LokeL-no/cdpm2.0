@@ -645,7 +645,9 @@ fn resolve_market(market: &MarketConfig, now_ts: i64) -> ResolvedMarket {
     if let Some(prefix) = &market.slug_prefix {
         let window_minutes = market.window_minutes.unwrap_or(15);
         let epoch_end = align_epoch_end(now_ts, window_minutes);
-        let slug = format!("{prefix}-{epoch_end}");
+        // Polymarket uses the START timestamp in slugs, not the end
+        let epoch_start = epoch_end - (window_minutes as i64 * 60);
+        let slug = format!("{prefix}-{epoch_start}");
         let window = Some(window_from_epoch(epoch_end, window_minutes));
         return ResolvedMarket { slug, window };
     }
@@ -660,8 +662,9 @@ fn resolve_market(market: &MarketConfig, now_ts: i64) -> ResolvedMarket {
 
     let window_minutes = market.window_minutes.unwrap_or(15);
     let epoch_end = align_epoch_end(now_ts, window_minutes);
+    let epoch_start = epoch_end - (window_minutes as i64 * 60);
     let fallback_prefix = fallback_slug_prefix(&market.label);
-    let slug = format!("{fallback_prefix}-{epoch_end}");
+    let slug = format!("{fallback_prefix}-{epoch_start}");
     let window = Some(window_from_epoch(epoch_end, window_minutes));
     error!(
         "market '{}' missing slug configuration, using fallback {}",
